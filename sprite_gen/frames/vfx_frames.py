@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from typing import Any
 
-import numpy as np
+from sprite_gen._deps import np
 from PIL import Image
 
 from sprite_gen.spec.vfx import frame_floor

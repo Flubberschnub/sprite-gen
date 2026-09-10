@@ -77,7 +77,7 @@ def preview(sheet: Image.Image, background: tuple[int, int, int], additive: bool
     if not additive:
         base = Image.new("RGBA", sheet.size, (*background, 255))
         return Image.alpha_composite(base, sheet).convert("RGB")
-    import numpy as np
+    from sprite_gen._deps import np
     rgba = np.asarray(sheet, dtype=np.float64)
     out = np.asarray(background) + rgba[:, :, :3] * (rgba[:, :, 3:4] / 255.0)
     return Image.fromarray(np.rint(out).clip(0, 255).astype(np.uint8))
