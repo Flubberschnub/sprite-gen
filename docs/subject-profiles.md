@@ -33,6 +33,13 @@ The geometric mean gives rectangular cells one equivalent side without making ei
 
 An explicit `--min-used-pixels` always wins. Explicit values are stamped into `extract_args` so heal reproduces them exactly. Profile-derived values are not stamped because frames are a cache of raw input, request, and engine; changing `subject` must re-resolve the formula on heal.
 
+## VFX animation workflow
+
+New `prepare --subject effect` runs now also declare a `vfx` block and use effect-specific
+prompts, fixed-origin slot extraction and explicit blank/sparse-frame policies. See
+[vfx-flipbooks](vfx-flipbooks.md). Existing requests without that block keep the legacy
+component path and the sparse-floor behavior described above.
+
 ## Synthetic boundary battery
 
 The repository verifies the profile with generated solid-shape strips rather than private production data.

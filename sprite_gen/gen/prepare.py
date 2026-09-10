@@ -24,6 +24,7 @@ from sprite_gen.frames.extract import color_distance
 from sprite_gen.compose.layers import require_valid_layer_request
 from sprite_gen.spec.layout import TAXONOMY, guide_rel, prompt_rel, raw_rel
 from sprite_gen.spec.subject import SUBJECTS
+from sprite_gen.spec import vfx as vfx_spec
 
 
 # Default safe margin is proportional to the cell dimension (floored), not a fixed
@@ -467,7 +468,7 @@ def normalize_states(raw: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
 # rule is written down, and `dropped_key_notes` makes every drop observable
 # instead of silent.
 REQUEST_KEYS_CARRIED = ("cell", "states", "style",
-                        "directions", "fit", "rig", "layers")
+                        "directions", "fit", "rig", "layers", "subject", "vfx")
 # Written by prepare itself, from CLI flags and from measuring the base image. An
 # incoming copy is not carried either, but it is restated rather than lost, so the
 # note names it separately: `character` comes from --character-id/--description/
@@ -751,6 +752,9 @@ def draw_guide(path: Path, frames: int, cell: dict[str, Any]) -> None:
 
 
 def row_prompt(request: dict[str, Any], state: str, entry: dict[str, Any]) -> str:
+    if "vfx" in request:
+        from sprite_gen.gen.vfx_prompt import row_prompt as effect_prompt
+        return effect_prompt(request, state, entry)
     cell = request["cell"]
     chroma = request["chroma_key"]
     character = request["character"]
@@ -852,6 +856,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--subject", choices=SUBJECTS, default=None,
                         help="what the run draws: character (default) or effect — "
                              "sets validation defaults like the sparse-frame floor")
+    vfx_spec.add_arguments(parser)
     parser.add_argument("--cell-size", type=int, default=256)
     parser.add_argument("--cell-width", type=int)
     parser.add_argument("--cell-height", type=int)
@@ -903,7 +908,43 @@ def _run(args: argparse.Namespace):
         raise SystemExit(f"output dir exists and is not empty: {out_dir}; pass --force")
 
     raw_request = load_request(args.request, args.request_json)
-    states = normalize_states(raw_request.get("states"))
+    subject = args.subject or raw_request.get("subject")
+    vfx_options = (args.effect_preset, args.vfx_matte, args.vfx_processing, args.vfx_origin)
+    if any(v is not None for v in vfx_options) or "vfx" in raw_request:
+        if subject == "character":
+            raise SystemExit("VFX options cannot be used with subject: character")
+        subject = subject or "effect"
+    if subject is not None and subject not in SUBJECTS:
+        raise SystemExit(f"unknown subject kind: {subject!r} (expected one of {', '.join(SUBJECTS)})")
+    vfx_config = None
+    state_input = raw_request.get("states")
+    if subject == "effect":
+        raw_vfx = raw_request.get("vfx", {})
+        if not isinstance(raw_vfx, dict):
+            raise SystemExit("vfx must be an object")
+        raw_vfx = dict(raw_vfx)
+        for key, value in zip(("preset", "matte", "processing", "origin"), vfx_options):
+            if value is not None:
+                raw_vfx[key] = value
+        preset = raw_vfx.get("preset", "burst")
+        if preset not in vfx_spec.PRESETS:
+            raise SystemExit(f"unknown effect preset: {preset!r}")
+        state_input = state_input or vfx_spec.preset_states(preset)
+        # Validate explicitly authored numeric fields before legacy normalization
+        # could coerce false/string/fractional values into a different request.
+        for state, entry in state_input.items():
+            if not isinstance(entry, dict):
+                raise SystemExit(f"VFX state {state} must be an object")
+            for key in ("frames", "fps"):
+                if key in entry and (type(entry[key]) is not int or entry[key] <= 0):
+                    raise SystemExit(f"VFX state {state}.{key} must be a positive integer")
+            if "loop" in entry and type(entry["loop"]) is not bool:
+                raise SystemExit(f"VFX state {state}.loop must be boolean")
+            if entry.get("takes"):
+                raise SystemExit("VFX takes are not supported; use separate states or runs")
+    states = normalize_states(state_input)
+    if subject == "effect":
+        vfx_config = vfx_spec.normalize_vfx(raw_vfx, states)
     # 방향 계약: CLI 가 request JSON 을 override 한다 (fit 과 동일 규칙)
     raw_directions = dict(raw_request.get("directions") or {})
     if args.directions:
@@ -936,6 +977,26 @@ def _run(args: argparse.Namespace):
     for note in dropped_key_notes(raw_request):
         print(f"[prepare] {note}", file=sys.stderr)
 
+    fit = dict(raw_request.get("fit", {}))
+    fit_overrides = {
+        "resample": args.fit_resample,
+        "align_x": args.fit_align_x,
+        "align_y": args.fit_align_y,
+        "ground_frames": args.fit_ground_frames,
+        "pixel_unfake": args.fit_pixel_unfake,
+        "logical_height": args.fit_logical_height,
+        "palette_size": args.fit_palette_size,
+        "detail_bias": args.fit_detail_bias,
+        "outline": args.fit_outline,
+        "pitch_hint": args.fit_pitch_hint,
+    }
+    for key, value in fit_overrides.items():
+        if value is not None:
+            fit[key] = value
+    if vfx_config is not None:
+        vfx_spec.config({"subject": "effect", "vfx": vfx_config, "states": states,
+                         "cell": cell, "fit": fit, "directions": directions, **layer_keys})
+
     out_dir.mkdir(parents=True, exist_ok=True)
     base_dest = None
     if args.base_image:
@@ -945,7 +1006,9 @@ def _run(args: argparse.Namespace):
         base_dest = out_dir / f"base-source{base_source.suffix.lower() or '.png'}"
         shutil.copy2(base_source, base_dest)
 
-    chroma_key = choose_chroma_key(base_dest, args.chroma_key)
+    chroma_key = ({"name": "black", "hex": "#000000", "rgb": [0, 0, 0], "selection": "vfx-black-additive"}
+                  if vfx_config and vfx_config["matte"] == "black-additive"
+                  else choose_chroma_key(base_dest, args.chroma_key))
     request = {
         "version": 1,
         "kind": "sprite-gen-request",
@@ -964,7 +1027,6 @@ def _run(args: argparse.Namespace):
     # field stays omitted for the default so the request has one canonical
     # representation. Downstream validation derives its floor from this plus
     # cell geometry via sprite_gen.spec.subject.
-    subject = args.subject or raw_request.get("subject")
     if subject is not None:
         if subject not in SUBJECTS:
             raise SystemExit(f"unknown subject kind: {subject!r} (expected one of {', '.join(SUBJECTS)})")
@@ -974,24 +1036,12 @@ def _run(args: argparse.Namespace):
     # 파일 택소노미 계약: 신규 런 기본. 방향 계약과 결합 시 raw/frames/guides/prompts
     # 가 <direction>/<pose> 로 나뉜다 (layout.py SSoT). legacy 런은 필드 없음 = flat.
     request["layout"] = TAXONOMY
-    fit = dict(raw_request.get("fit", {}))
-    fit_overrides = {
-        "resample": args.fit_resample,
-        "align_x": args.fit_align_x,
-        "align_y": args.fit_align_y,
-        "ground_frames": args.fit_ground_frames,
-        "pixel_unfake": args.fit_pixel_unfake,
-        "logical_height": args.fit_logical_height,
-        "palette_size": args.fit_palette_size,
-        "detail_bias": args.fit_detail_bias,
-        "outline": args.fit_outline,
-        "pitch_hint": args.fit_pitch_hint,
-    }
-    for key, value in fit_overrides.items():
-        if value is not None:
-            fit[key] = value
     if fit:
         request["fit"] = fit
+    if vfx_config is not None:
+        request["vfx"] = vfx_config
+        if "style" not in raw_request and args.style == STYLE_DEFAULT:
+            request["style"] = vfx_spec.STYLE_DEFAULT
     # Optional layer declaration, validated above. Absent = a non-layer run whose
     # emitted key set is exactly what it was before the feature existed.
     request.update(layer_keys)

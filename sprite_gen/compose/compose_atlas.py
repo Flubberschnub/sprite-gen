@@ -19,6 +19,7 @@ from sprite_gen.compose.layers import (has_layer_contract, landmark_map, require
                                state_track)
 from sprite_gen.spec.runio import acquire_run_dir_lock, atomic_save_image, atomic_write_text, load_request
 from sprite_gen.spec.subject import default_min_used_pixels
+from sprite_gen.spec import vfx as vfx_spec
 
 
 def alpha_nonzero_count(image: Image.Image) -> int:
@@ -75,6 +76,7 @@ def _run(args: argparse.Namespace):
         print(f"[heal] re-derived stale rows: {', '.join(heal_report['healed'])}", file=sys.stderr)
     acquire_run_dir_lock(run_dir, "compose_sprite_atlas")
     request = load_request(run_dir)
+    vfx_config = vfx_spec.config(request)
     # A run that declares no rig / track / layers is not a layer run and this is a
     # no-op (docs/layer-tracks.md §1). One that does is checked before any bake
     # work, so an invalid rig never reaches the manifest as half-declared pivots.
@@ -134,6 +136,8 @@ def _run(args: argparse.Namespace):
 
     positions_by_state = {state: _positions(state) for state in states}
     breathe_by_state = {state: state_breathe(curation, state) for state in states}
+    if vfx_config and any(breathe_by_state.values()):
+        raise SystemExit("character breathing cannot be applied to VFX flipbooks")
 
     columns = max(
         max(1, len({_instance_key(state, i, ph) for i, ph in positions_by_state[state]}))
@@ -163,6 +167,7 @@ def _run(args: argparse.Namespace):
         breathe_cfg = breathe_by_state[state]
         variant = variants[state]
         frames = []
+        row_has_pixels = False
         row_source_frames: list[Image.Image] = []   # 호흡 적용 **직전** 프레임 (관측용)
         row_anatomy = None                          # 줄 전체가 공유하는 한 벌 (첫 프레임에서 확정)
         baked: dict[tuple, dict[str, Any]] = {}  # instance key -> shared rect
@@ -202,7 +207,10 @@ def _run(args: argparse.Namespace):
                 # 매 루프 시작에서 튀고 GIF 굽기와 그림이 갈린다 (validator 검증 2026-07-25).
                 frame = phase_frame(frame, breathe_cfg, breathe_phase, row_anatomy)
             nontransparent = alpha_nonzero_count(frame)
-            if nontransparent < args.min_used_pixels:
+            row_has_pixels = row_has_pixels or nontransparent > 0
+            minimum = (vfx_spec.frame_floor(vfx_config, state, source_index, args.min_used_pixels)
+                       if vfx_config else args.min_used_pixels)
+            if nontransparent < minimum:
                 errors.append(f"{state} frame {frame_index} is too sparse ({nontransparent})")
             left = len(baked) * cell_width
             top = row_index * cell_height
@@ -212,6 +220,8 @@ def _run(args: argparse.Namespace):
             frames.append(rect)
             cells.append({"state": state, "frame": frame_index, "nontransparent_pixels": nontransparent, **rect})
 
+        if vfx_config and not row_has_pixels:
+            errors.append(f"{state}: selected VFX sequence is entirely empty")
         frame_layout["rows"][state] = frames
         # durations_ms: 프레임별 표시 시간 계약 (지금은 fps 등간격 — 프레임별 편집
         # UI 가 생기면 여기만 비등간격으로 채워진다). 소비자는 이 배열이 있으면
@@ -310,6 +320,9 @@ def _run(args: argparse.Namespace):
         "animation": animation,
         "frame_layout": frame_layout,
     }
+    if vfx_config:
+        manifest["subject"] = "effect"
+        manifest["vfx"] = vfx_config
     if rig_block is not None:
         manifest["rig"] = rig_block
     atomic_write_text(run_dir / args.manifest, json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")

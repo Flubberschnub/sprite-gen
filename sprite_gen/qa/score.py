@@ -57,6 +57,14 @@ def _hint_for_row(row: dict[str, Any], *, histogram_min: float, dhash_min: float
     found = int(row.get("found_frames", 0))
     metrics = row.get("metrics") or {}
     hints: list[str] = []
+    if row.get("vfx"):
+        if found != expected:
+            hints.append(f"{state}: regenerate exactly {expected} equal VFX frame slots, retaining the fixed origin")
+        if float(metrics.get("motion_presence", 1.0)) < 0.01 and expected > 1:
+            hints.append(f"{state}: make the effect visibly progress while keeping the camera and origin fixed")
+        for issue in [*row.get("errors", []), *row.get("warnings", [])]:
+            hints.append(f"{state}: repair the VFX defect: {issue}")
+        return hints
     if found != expected:
         hints.append(
             f"{state}: The previous strip was read as {found} pose(s), but the request requires exactly "
@@ -117,9 +125,9 @@ def score_inspection(report: dict[str, Any]) -> dict[str, Any]:
         score -= 3 * len(warnings)
         if float(metrics.get("motion_presence", 1.0)) < 0.01 and expected > 1:
             score -= 12
-        if float((metrics.get("dhash_similarity") or {}).get("min", 1.0)) < dhash_min:
+        if not row.get("vfx") and float((metrics.get("dhash_similarity") or {}).get("min", 1.0)) < dhash_min:
             score -= 10
-        if histogram_min > 0 and float((metrics.get("histogram_intersection") or {}).get("min", 1.0)) < histogram_min:
+        if not row.get("vfx") and histogram_min > 0 and float((metrics.get("histogram_intersection") or {}).get("min", 1.0)) < histogram_min:
             score -= 10
         score = max(0.0, min(100.0, score))
         row_hints = _unique(_hint_for_row(row, histogram_min=histogram_min, dhash_min=dhash_min))

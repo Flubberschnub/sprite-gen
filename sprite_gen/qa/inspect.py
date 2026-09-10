@@ -17,6 +17,8 @@ from sprite_gen.spec.layout import frames_dir_rel, raw_rel, state_frame_total
 from sprite_gen.spec.runio import (acquire_run_dir_lock, atomic_write_text, load_request,
                               read_guard, relative_posix)
 from sprite_gen.frames.segment import segment_strip
+from sprite_gen.spec import vfx as vfx_spec
+from sprite_gen.frames import vfx_frames
 
 
 HISTOGRAM_BINS = 64
@@ -118,6 +120,10 @@ def _strip_for_state(run_dir: Path, request: dict[str, Any], state: str, args: a
         else float(chroma_config.get("spill_max_fraction", 0.005))
     )
     with Image.open(raw_path) as opened:
+        cfg = vfx_spec.config(request)
+        if cfg:
+            return vfx_frames.matte_source(opened, cfg, chroma_key, args, chroma_mode=chroma_mode,
+                                           unmix_reach=unmix_reach, spill_max_fraction=spill_max_fraction)
         if chroma_mode == "ycbcr":
             notes: list[str] = []
             return extract.remove_chroma_background_ycbcr(opened, chroma_key, notes)
@@ -134,6 +140,11 @@ def _strip_for_state(run_dir: Path, request: dict[str, Any], state: str, args: a
 
 def _frames_from_raw(strip: Image.Image, expected: int, request: dict[str, Any]) -> tuple[list[Image.Image], int]:
     cell_width, cell_height, safe_margin_x, safe_margin_y = extract.cell_geometry(request["cell"])
+    cfg = vfx_spec.config(request)
+    if cfg:
+        frames, _ = vfx_frames.split_frames(strip, expected, (cell_width, cell_height), cfg,
+                                            (request.get("fit") or {}).get("resample"))
+        return frames, len(frames)
     segments, natural = segment_strip(strip, expected)
     frames: list[Image.Image] = []
     for left, right in segments:
@@ -313,6 +324,7 @@ def _inspect_run_impl(run_dir: Path, states: str = "all", **kwargs: object) -> d
     # with no generation at all ({}) is fine: inspect falls back to raw-projection below.
     extract.load_consistent_frames_manifest(run_dir)
     request = load_request(run_dir)
+    vfx_config = vfx_spec.config(request)
     selected = _state_list(request, args.states)
     rows: list[dict[str, Any]] = []
     errors: list[str] = []
@@ -324,23 +336,22 @@ def _inspect_run_impl(run_dir: Path, states: str = "all", **kwargs: object) -> d
         source = "frames"
         natural_found: int | None = None
         if not frames:
-            strip = _strip_for_state(run_dir, request, state, args)
-            if strip is None:
-                row = {
-                    "state": state,
-                    "source": "missing",
-                    "expected_frames": expected,
-                    "found_frames": 0,
-                    "natural_pose_count": 0,
-                    "ok": False,
-                    "errors": [f"{state}: missing extracted frames and raw strip"],
-                    "warnings": [],
-                }
+            strip = None
+            try:
+                strip = _strip_for_state(run_dir, request, state, args)
+                if strip is None:
+                    raise ValueError("missing extracted frames and raw strip")
+                frames, natural_found = _frames_from_raw(strip, expected, request)
+                source = "raw-vfx-slots" if vfx_config else "raw-projection"
+            except (OSError, ValueError) as exc:
+                row = {"state": state, "source": "missing" if strip is None else "invalid-raw",
+                       "expected_frames": expected, "found_frames": 0, "natural_pose_count": 0,
+                       "ok": False, "errors": [f"{state}: {exc}"], "warnings": []}
+                if vfx_config:
+                    row["vfx"] = True
                 rows.append(row)
                 errors.extend(row["errors"])
                 continue
-            frames, natural_found = _frames_from_raw(strip, expected, request)
-            source = "raw-projection"
 
         found = len(frames) if source == "frames" else int(natural_found or len(frames))
         row_errors: list[str] = []
@@ -353,13 +364,19 @@ def _inspect_run_impl(run_dir: Path, states: str = "all", **kwargs: object) -> d
         if manifest_row is not None:
             row_errors.extend(str(error) for error in manifest_row.get("errors", []))
             row_warnings.extend(str(warning) for warning in manifest_row.get("warnings", []))
+        if vfx_config:
+            from sprite_gen.spec.subject import default_min_used_pixels
+            fx_errors, fx_warnings, _ = vfx_frames.inspect_frames(
+                frames, state, vfx_config, default_min_used_pixels(request))
+            row_errors.extend(f"{state}: {e}" for e in fx_errors)
+            row_warnings.extend(f"{state}: {w}" for w in fx_warnings)
         metrics = _similarity_summary(frames)
-        if args.histogram_min > 0 and metrics["histogram_intersection"]["min"] < args.histogram_min:
+        if not vfx_config and args.histogram_min > 0 and metrics["histogram_intersection"]["min"] < args.histogram_min:
             row_warnings.append(
                 f"{state}: RGB histogram identity similarity is low "
                 f"({metrics['histogram_intersection']['min']:.3f} < {args.histogram_min:.3f})"
             )
-        if metrics["dhash_similarity"]["min"] < args.dhash_min:
+        if not vfx_config and metrics["dhash_similarity"]["min"] < args.dhash_min:
             row_warnings.append(
                 f"{state}: dHash silhouette similarity is low "
                 f"({metrics['dhash_similarity']['min']:.3f} < {args.dhash_min:.3f})"
@@ -381,6 +398,8 @@ def _inspect_run_impl(run_dir: Path, states: str = "all", **kwargs: object) -> d
             "errors": row_errors,
             "warnings": row_warnings,
         }
+        if vfx_config:
+            row["vfx"] = True
         rows.append(row)
         errors.extend(row_errors)
         warnings.extend(row_warnings)

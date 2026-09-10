@@ -114,6 +114,25 @@ sprite-gen export-aseprite --run-dir <run>                       # Aseprite JSON
 
 The agent-facing workflow, gates and contracts live in [`SKILL.md`](SKILL.md).
 
+## VFX flipbooks
+
+`prepare --subject effect` now supports standalone bursts, shockwaves, hits, dust,
+slashes, sparks, movement streaks and pulses. `--effect-preset shockwave` implies the
+same mode. It uses VFX prompts and fixed-origin extraction rather than character
+segmentation and recentering. Existing generation providers and curation are reused.
+
+```bash
+sprite-gen prepare --out-dir runs/shockwave --character-id shockwave --effect-preset shockwave
+sprite-gen gen-set --run-dir runs/shockwave --provider codex
+sprite-gen extract --run-dir runs/shockwave
+sprite-gen export-flipbook --run-dir runs/shockwave --columns 4
+```
+
+The output includes a uniform PNG grid, timing/origin/blending metadata, and light/dark
+contact previews. Continuous alpha, explicit blank/sparse frames, pixel processing,
+black-additive emission plates and grayscale export have separate policies.
+[Workflow, presets, compatibility and Unity consumption notes](docs/vfx-flipbooks.md).
+
 ## Install as a skill
 
 ```bash
