@@ -2991,8 +2991,11 @@ def _run_locked(args: argparse.Namespace, run_dir: Path):
                     strip = vfx_frames.matte_source(opened, vfx_config, chroma_key, args,
                         chroma_mode=chroma_mode, unmix_reach=unmix_reach,
                         spill_max_fraction=spill_max_fraction)
+                strip, width_geometry = vfx_frames.normalize_strip_width(
+                    strip, frame_count, vfx_config, fit_config.get("resample"))
                 frames, geometry = vfx_frames.split_frames(strip, frame_count,
                     (cell_width, cell_height), vfx_config, fit_config.get("resample"))
+                geometry.update(width_geometry)
                 # A letterbox must not hide source clipping. Inspect slot edges
                 # BEFORE resizing, including the edges between neighboring frames.
                 sw = strip.width // frame_count
