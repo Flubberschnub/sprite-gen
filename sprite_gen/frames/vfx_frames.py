@@ -1,5 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Fixed-space VFX extraction and QA. No connected-component filtering or registration."""
+"""VFX source recovery, shared-canvas placement and QA.
+
+AI image generators often draw requested frames at uneven horizontal positions. The
+default path therefore reuses sprite-gen's projection/DP segmentation to recover
+content-aware source regions before repacking them onto one shared VFX canvas. Strict
+fixed-slot slicing remains available for hand-authored or already regular strips.
+"""
 from __future__ import annotations
 
 import argparse
@@ -8,6 +14,7 @@ from typing import Any
 from sprite_gen._deps import np
 from PIL import Image
 
+from sprite_gen.frames.segment import segment_boundaries
 from sprite_gen.spec.vfx import frame_floor
 
 
@@ -56,17 +63,10 @@ def _resample_mode(cfg: dict[str, Any], resample: str | None) -> Image.Resamplin
 
 def normalize_strip_width(strip: Image.Image, count: int, cfg: dict[str, Any],
                           resample: str | None = None) -> tuple[Image.Image, dict[str, Any]]:
-    """Make an AI-generated strip exactly divisible by its declared frame count.
+    """Make a fixed-slot strip exactly divisible by its declared frame count.
 
-    Image providers own their returned canvas dimensions and may differ by a few
-    pixels from the layout guide. Divisibility is therefore not evidence that the
-    model followed the visual slots. For VFX we preserve the fixed coordinate
-    system by applying one tiny, deterministic horizontal resize to the WHOLE
-    matted strip, then keep the actual slot splitter strict.
-
-    The correction is at most half a frame-count pixels when choosing the nearest
-    compatible width (for eight frames, <=4 px). Every frame receives the same
-    horizontal scale, so expansion, travel and the authored origin remain coherent.
+    This helper is intentionally for ``vfx.layout=fixed-slots``. Content-aware VFX
+    does not need a divisible source width because it recovers its actual regions.
     """
     if count <= 0:
         raise ValueError("frame count must be positive")
@@ -101,42 +101,108 @@ def normalize_strip_width(strip: Image.Image, count: int, cfg: dict[str, Any],
     }
 
 
-def split_frames(strip: Image.Image, count: int, size: tuple[int, int], cfg: dict[str, Any],
-                 resample: str | None = None) -> tuple[list[Image.Image], dict[str, Any]]:
-    """Cut exact equal slots; fit the SAME entire canvas for every frame.
+def _shared_canvas_frames(crops: list[Image.Image], source_width: int,
+                          size: tuple[int, int], cfg: dict[str, Any],
+                          resample: str | None = None) -> tuple[list[Image.Image], dict[str, Any]]:
+    """Place variable-width recovered regions on one common source canvas.
 
-    Letterboxing is sequence-wide and origin-relative. Source aspect differences
-    never cause anisotropic stretching, content normalization or independent crops.
-    Generated strips should pass through :func:`normalize_strip_width` first; this
-    low-level splitter remains strict so imported/hand-authored geometry cannot be
-    silently guessed.
+    No frame is independently normalized to its visible bounds. Each crop keeps its
+    original pixels and is padded to a shared width with its configured origin aligned.
+    A single scale is then applied to every frame, preserving real growth/travel.
     """
-    if count <= 0 or strip.width % count:
-        raise ValueError(f"strip width {strip.width} must be divisible by frame count {count}; "
-                         "normalize the generated strip before fixed-slot slicing")
-    sw, sh = strip.width // count, strip.height
+    source_height = crops[0].height if crops else 0
     w, h = size
-    if min(sw, sh, w, h) <= 0:
+    if min(source_width, source_height, w, h) <= 0:
         raise ValueError("source and output frame dimensions must be positive")
-    scale = min(w / sw, h / sh)
-    rw, rh = max(1, round(sw * scale)), max(1, round(sh * scale))
+    if any(crop.height != source_height for crop in crops):
+        raise ValueError("VFX source regions must share one source height")
+    scale = min(w / source_width, h / source_height)
+    rw, rh = max(1, round(source_width * scale)), max(1, round(source_height * scale))
     ox, oy = cfg["origin"]
     dx, dy = round((w - rw) * ox), round((h - rh) * oy)
     mode = _resample_mode(cfg, resample)
-    frames = []
-    for index in range(count):
-        frame = strip.crop((index * sw, 0, (index + 1) * sw, sh)).convert("RGBA")
-        frame = frame.resize((rw, rh), mode)
+    frames: list[Image.Image] = []
+    source_offsets: list[int] = []
+    for crop in crops:
+        source = Image.new("RGBA", (source_width, source_height))
+        # Align the same normalized origin for every recovered region without
+        # changing the crop's scale. This is padding/repacking, not recentering.
+        px = round(source_width * ox - crop.width * ox)
+        source_offsets.append(px)
+        source.paste(crop.convert("RGBA"), (px, 0))
+        frame = source.resize((rw, rh), mode)
         if cfg["processing"] == "pixel":
             a = np.array(frame)
             a[:, :, 3] = np.where(a[:, :, 3] >= 128, 255, 0)
             a[a[:, :, 3] == 0] = 0
             frame = Image.fromarray(a)
         cell = Image.new("RGBA", size)
-        cell.paste(frame, (dx, dy))  # no mask: preserve straight alpha without squaring coverage
+        cell.paste(frame, (dx, dy))
         frames.append(cell)
-    return frames, {"source_cell": [sw, sh], "scale": scale, "resized_cell": [rw, rh],
-                    "offset": [dx, dy], "origin": list(cfg["origin"]), "method": "vfx-fixed-slots"}
+    return frames, {
+        "source_cell": [source_width, source_height],
+        "scale": scale,
+        "resized_cell": [rw, rh],
+        "offset": [dx, dy],
+        "source_offsets": source_offsets,
+        "origin": list(cfg["origin"]),
+    }
+
+
+def content_aware_regions(strip: Image.Image, count: int) -> tuple[list[tuple[int, int, int, int]], int]:
+    """Recover exactly ``count`` ordered source regions using projection/DP cuts."""
+    boundaries, natural = segment_boundaries(strip, count)
+    if boundaries is None:
+        raise ValueError(
+            f"content-aware VFX segmentation could not recover {count} frame regions "
+            f"(natural estimate {natural}); regenerate with clearer horizontal separation "
+            "or use vfx.layout=fixed-slots for a known regular sheet"
+        )
+    edges = [0, *boundaries, strip.width]
+    regions = [(edges[i], 0, edges[i + 1], strip.height) for i in range(count)]
+    return regions, natural
+
+
+def split_frames(strip: Image.Image, count: int, size: tuple[int, int], cfg: dict[str, Any],
+                 resample: str | None = None) -> tuple[list[Image.Image], dict[str, Any]]:
+    """Recover VFX frames and repack them onto one shared output canvas.
+
+    ``content-aware`` (default) uses the repository's projection/DP segmentation to
+    find low-mass cuts rather than assuming equal source slots. ``fixed-slots`` keeps
+    the strict old VFX behavior for already regular sheets.
+    """
+    if count <= 0:
+        raise ValueError("frame count must be positive")
+    layout = cfg.get("layout", "content-aware")
+    if layout == "content-aware":
+        regions, natural = content_aware_regions(strip, count)
+        crops = [strip.crop(region).convert("RGBA") for region in regions]
+        source_width = max(region[2] - region[0] for region in regions)
+        frames, geometry = _shared_canvas_frames(crops, source_width, size, cfg, resample)
+        geometry.update({
+            "method": "vfx-content-aware",
+            "natural_frame_estimate": natural,
+            "source_regions": [list(region) for region in regions],
+            "source_region_widths": [region[2] - region[0] for region in regions],
+        })
+        return frames, geometry
+    if layout != "fixed-slots":
+        raise ValueError(f"unknown VFX layout mode: {layout!r}")
+    if strip.width % count:
+        raise ValueError(
+            f"strip width {strip.width} must be divisible by frame count {count}; "
+            "normalize the strip first or use vfx.layout=content-aware"
+        )
+    sw = strip.width // count
+    regions = [(i * sw, 0, (i + 1) * sw, strip.height) for i in range(count)]
+    crops = [strip.crop(region).convert("RGBA") for region in regions]
+    frames, geometry = _shared_canvas_frames(crops, sw, size, cfg, resample)
+    geometry.update({
+        "method": "vfx-fixed-slots",
+        "source_regions": [list(region) for region in regions],
+        "source_region_widths": [sw] * count,
+    })
+    return frames, geometry
 
 
 def edge_count(frame: Image.Image, threshold: int, margin: int = 1) -> int:
@@ -145,6 +211,12 @@ def edge_count(frame: Image.Image, threshold: int, margin: int = 1) -> int:
     border[:margin, :] = border[-margin:, :] = True
     border[:, :margin] = border[:, -margin:] = True
     return int(np.count_nonzero(mask & border))
+
+
+def source_edge_counts(strip: Image.Image, geometry: dict[str, Any], threshold: int) -> list[int]:
+    """Edge contact on the actual recovered source regions, before repacking."""
+    regions = geometry.get("source_regions") or []
+    return [edge_count(strip.crop(tuple(region)).convert("RGBA"), threshold) for region in regions]
 
 
 def inspect_frames(frames: list[Image.Image], state: str, cfg: dict[str, Any], floor: int,
