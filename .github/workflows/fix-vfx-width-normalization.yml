@@ -18,7 +18,7 @@ jobs:
         with:
           python-version: '3.10'
       - name: Wire normalization into VFX extraction
-        shell: python
+        shell: python {0}
         run: |
           from pathlib import Path
 
