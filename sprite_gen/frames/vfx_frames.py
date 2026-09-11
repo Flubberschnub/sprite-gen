@@ -48,16 +48,72 @@ def matte_source(image: Image.Image, cfg: dict[str, Any], key: tuple[int, int, i
                                     spill_max_fraction=spill_max_fraction)
 
 
+def _resample_mode(cfg: dict[str, Any], resample: str | None) -> Image.Resampling:
+    return (Image.Resampling.NEAREST
+            if cfg["processing"] == "pixel" or resample == "nearest"
+            else Image.Resampling.LANCZOS)
+
+
+def normalize_strip_width(strip: Image.Image, count: int, cfg: dict[str, Any],
+                          resample: str | None = None) -> tuple[Image.Image, dict[str, Any]]:
+    """Make an AI-generated strip exactly divisible by its declared frame count.
+
+    Image providers own their returned canvas dimensions and may differ by a few
+    pixels from the layout guide. Divisibility is therefore not evidence that the
+    model followed the visual slots. For VFX we preserve the fixed coordinate
+    system by applying one tiny, deterministic horizontal resize to the WHOLE
+    matted strip, then keep the actual slot splitter strict.
+
+    The correction is at most half a frame-count pixels when choosing the nearest
+    compatible width (for eight frames, <=4 px). Every frame receives the same
+    horizontal scale, so expansion, travel and the authored origin remain coherent.
+    """
+    if count <= 0:
+        raise ValueError("frame count must be positive")
+    if strip.width < count or strip.height <= 0:
+        raise ValueError(
+            f"source strip {strip.width}x{strip.height} is too small for {count} frame slots"
+        )
+
+    original_width = strip.width
+    if original_width % count == 0:
+        return strip, {
+            "source_width_original": original_width,
+            "source_width_normalized": original_width,
+            "width_normalized": False,
+            "width_delta_pixels": 0,
+            "width_scale": 1.0,
+            "width_policy": "nearest-frame-multiple",
+        }
+
+    # Integer half-up rounding of original_width / count. This picks the nearest
+    # legal slot width without Python's tie-to-even round() behavior.
+    slot_width = max(1, (2 * original_width + count) // (2 * count))
+    normalized_width = slot_width * count
+    normalized = strip.resize((normalized_width, strip.height), _resample_mode(cfg, resample))
+    return normalized, {
+        "source_width_original": original_width,
+        "source_width_normalized": normalized_width,
+        "width_normalized": True,
+        "width_delta_pixels": normalized_width - original_width,
+        "width_scale": normalized_width / original_width,
+        "width_policy": "nearest-frame-multiple",
+    }
+
+
 def split_frames(strip: Image.Image, count: int, size: tuple[int, int], cfg: dict[str, Any],
                  resample: str | None = None) -> tuple[list[Image.Image], dict[str, Any]]:
     """Cut exact equal slots; fit the SAME entire canvas for every frame.
 
     Letterboxing is sequence-wide and origin-relative. Source aspect differences
     never cause anisotropic stretching, content normalization or independent crops.
+    Generated strips should pass through :func:`normalize_strip_width` first; this
+    low-level splitter remains strict so imported/hand-authored geometry cannot be
+    silently guessed.
     """
     if count <= 0 or strip.width % count:
         raise ValueError(f"strip width {strip.width} must be divisible by frame count {count}; "
-                         "regenerate an equal-slot strip rather than guessing frame boundaries")
+                         "normalize the generated strip before fixed-slot slicing")
     sw, sh = strip.width // count, strip.height
     w, h = size
     if min(sw, sh, w, h) <= 0:
@@ -66,8 +122,7 @@ def split_frames(strip: Image.Image, count: int, size: tuple[int, int], cfg: dic
     rw, rh = max(1, round(sw * scale)), max(1, round(sh * scale))
     ox, oy = cfg["origin"]
     dx, dy = round((w - rw) * ox), round((h - rh) * oy)
-    mode = (Image.Resampling.NEAREST if cfg["processing"] == "pixel" or resample == "nearest"
-            else Image.Resampling.LANCZOS)
+    mode = _resample_mode(cfg, resample)
     frames = []
     for index in range(count):
         frame = strip.crop((index * sw, 0, (index + 1) * sw, sh)).convert("RGBA")
