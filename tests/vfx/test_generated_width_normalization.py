@@ -12,7 +12,7 @@ from sprite_gen.spec import vfx
 
 
 def _cfg():
-    return vfx.normalize_vfx({}, {"shockwave": {"frames": 8, "fps": 16, "loop": False}})
+    return vfx.normalize_vfx({"layout": "fixed-slots"}, {"shockwave": {"frames": 8, "fps": 16, "loop": False}})
 
 
 def test_normalize_generated_strip_to_nearest_frame_multiple():
@@ -31,7 +31,7 @@ def test_extract_accepts_provider_width_that_is_not_divisible_by_frame_count(tmp
     run = tmp_path / "run"
     request = {
         "subject": "effect",
-        "vfx": {"matte": "source-alpha", "processing": "crisp", "origin": [0.5, 0.5]},
+        "vfx": {"matte": "source-alpha", "processing": "crisp", "origin": [0.5, 0.5], "layout": "fixed-slots"},
         "states": {
             "shockwave": {
                 "frames": 8,

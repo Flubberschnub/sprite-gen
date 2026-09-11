@@ -909,7 +909,8 @@ def _run(args: argparse.Namespace):
 
     raw_request = load_request(args.request, args.request_json)
     subject = args.subject or raw_request.get("subject")
-    vfx_options = (args.effect_preset, args.vfx_matte, args.vfx_processing, args.vfx_origin)
+    vfx_options = (args.effect_preset, args.vfx_layout, args.vfx_matte,
+                   args.vfx_processing, args.vfx_origin)
     if any(v is not None for v in vfx_options) or "vfx" in raw_request:
         if subject == "character":
             raise SystemExit("VFX options cannot be used with subject: character")
@@ -923,7 +924,7 @@ def _run(args: argparse.Namespace):
         if not isinstance(raw_vfx, dict):
             raise SystemExit("vfx must be an object")
         raw_vfx = dict(raw_vfx)
-        for key, value in zip(("preset", "matte", "processing", "origin"), vfx_options):
+        for key, value in zip(("preset", "layout", "matte", "processing", "origin"), vfx_options):
             if value is not None:
                 raw_vfx[key] = value
         preset = raw_vfx.get("preset", "burst")

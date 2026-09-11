@@ -40,7 +40,7 @@ def source_frames(count=4):
 def make_run(path: Path, frames=None, **options):
     frames = frames or source_frames()
     n = len(frames)
-    request = {"subject": "effect", "vfx": {"matte": "source-alpha", **options},
+    request = {"subject": "effect", "vfx": {"matte": "source-alpha", "layout": "fixed-slots", **options},
                "states": {"burst": {"frames": n, "fps": 16, "loop": False, "action": "expand and dissipate"}}}
     prepare.run(out_dir=path, character_id="test-vfx", cell_size=SIZE,
                 request_json=json.dumps(request))
@@ -145,7 +145,7 @@ def test_letterboxing_uses_shared_scale_and_origin_not_visible_bounds():
     d = ImageDraw.Draw(strip)
     for i in range(4):
         d.rectangle((128*i+20, 10, 128*i+40+i*5, 30), fill="white")
-    frames, geometry = vfx_frames.split_frames(strip, 4, (64, 64), cfg(origin=[0.25, 0.75]), "nearest")
+    frames, geometry = vfx_frames.split_frames(strip, 4, (64, 64), cfg(origin=[0.25, 0.75], layout="fixed-slots"), "nearest")
     assert geometry["scale"] == 0.5
     assert geometry["offset"] == [0, 24]
     assert {f.getbbox()[1] for f in frames} == {29}  # 10 * 0.5 + 24, without content-dependent placement
@@ -154,7 +154,7 @@ def test_letterboxing_uses_shared_scale_and_origin_not_visible_bounds():
 
 def test_width_must_divide_exactly_into_slots():
     with pytest.raises(ValueError, match="divisible"):
-        vfx_frames.split_frames(Image.new("RGBA", (255, 64)), 4, (64, 64), cfg())
+        vfx_frames.split_frames(Image.new("RGBA", (255, 64)), 4, (64, 64), cfg(layout="fixed-slots"))
 
 
 def test_declared_blank_and_sparse_frames_are_preserved(tmp_path):

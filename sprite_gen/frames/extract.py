@@ -2991,28 +2991,35 @@ def _run_locked(args: argparse.Namespace, run_dir: Path):
                     strip = vfx_frames.matte_source(opened, vfx_config, chroma_key, args,
                         chroma_mode=chroma_mode, unmix_reach=unmix_reach,
                         spill_max_fraction=spill_max_fraction)
-                strip, width_geometry = vfx_frames.normalize_strip_width(
-                    strip, frame_count, vfx_config, fit_config.get("resample"))
+                effective_vfx = vfx_config
+                width_geometry = {}
+                # Truly blank source frames have no content from which a content-aware
+                # boundary can be inferred. Keep those explicitly authored cases on the
+                # regular-slot path; normal generated VFX defaults to content-aware.
+                if vfx_config["layout"] == "fixed-slots" or vfx_config["allow_blank_frames"].get(state):
+                    effective_vfx = {**vfx_config, "layout": "fixed-slots"}
+                    strip, width_geometry = vfx_frames.normalize_strip_width(
+                        strip, frame_count, effective_vfx, fit_config.get("resample"))
+                    if vfx_config["layout"] != "fixed-slots":
+                        width_geometry["layout_fallback"] = "fixed-slots-for-declared-blank-frames"
                 frames, geometry = vfx_frames.split_frames(strip, frame_count,
-                    (cell_width, cell_height), vfx_config, fit_config.get("resample"))
+                    (cell_width, cell_height), effective_vfx, fit_config.get("resample"))
                 geometry.update(width_geometry)
-                # A letterbox must not hide source clipping. Inspect slot edges
-                # BEFORE resizing, including the edges between neighboring frames.
-                sw = strip.width // frame_count
-                source_edges = [vfx_frames.edge_count(strip.crop((i*sw, 0, (i+1)*sw, strip.height)),
-                                vfx_config["edge_alpha"]) for i in range(frame_count)]
+                # Inspect the ACTUAL recovered source regions before shared-canvas placement.
+                source_edges = vfx_frames.source_edge_counts(strip, geometry, vfx_config["edge_alpha"])
                 geometry["source_edge_contacts"] = source_edges
                 for index, count in enumerate(source_edges):
                     if count:
                         (all_errors if vfx_config["edge_policy"] == "error" else all_warnings).append(
                             f"{state}: source frame {index} has {count} edge-contact pixels; "
-                            "regenerate with more source padding or explicitly set vfx.edge_policy=warn")
+                            "the recovered region may be clipped or its boundary may cross visible content. "
+                            "Inspect the extracted frame; use edge_policy=warn only when the frame is visibly complete")
                 plain_frames = frames
                 if vfx_config["processing"] == "pixel":
                     plain_frames, _ = vfx_frames.split_frames(strip, frame_count,
-                        (cell_width, cell_height), {**vfx_config, "processing": "crisp"}, "nearest")
-                finalize_state(state, frames, frame_count, "vfx-fixed-slots",
-                               plain_frames=plain_frames, vfx_geometry=geometry)
+                        (cell_width, cell_height), {**effective_vfx, "processing": "crisp"}, "nearest")
+                finalize_state(state, frames, frame_count, geometry["method"],
+                    plain_frames=plain_frames, vfx_geometry=geometry)
             except (OSError, ValueError) as exc:
                 all_errors.append(f"{state}: {exc}")
             continue
