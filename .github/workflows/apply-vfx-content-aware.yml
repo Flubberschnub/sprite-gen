@@ -84,7 +84,7 @@ jobs:
                         (cell_width, cell_height), {**effective_vfx, "processing": "crisp"}, "nearest")
                 finalize_state(state, frames, frame_count, geometry["method"],
                                plain_frames=plain_frames, vfx_geometry=geometry)
-'''
+          '''
           path.write_text(text[:start] + replacement + text[end:], encoding='utf-8')
 
           replace_once(
