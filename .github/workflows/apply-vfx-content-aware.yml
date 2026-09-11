@@ -4,7 +4,6 @@ on:
   push:
     branches: [feat/vfx-flipbooks]
     paths:
-      - '.github/vfx-content-aware.patch'
       - '.github/workflows/apply-vfx-content-aware.yml'
 
 permissions:
@@ -19,23 +18,116 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      - name: Verify patch applies cleanly
-        run: git apply --check .github/vfx-content-aware.patch
-      - name: Apply implementation
-        run: git apply --index .github/vfx-content-aware.patch
+      - name: Wire content-aware layout through prepare and extraction
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if text.count(old) != 1:
+                  raise SystemExit(f'{path}: expected one integration target, found {text.count(old)}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          replace_once(
+              'sprite_gen/gen/prepare.py',
+              '    vfx_options = (args.effect_preset, args.vfx_matte, args.vfx_processing, args.vfx_origin)\n',
+              '    vfx_options = (args.effect_preset, args.vfx_layout, args.vfx_matte,\n'
+              '                   args.vfx_processing, args.vfx_origin)\n',
+          )
+          replace_once(
+              'sprite_gen/gen/prepare.py',
+              '        for key, value in zip(("preset", "matte", "processing", "origin"), vfx_options):\n',
+              '        for key, value in zip(("preset", "layout", "matte", "processing", "origin"), vfx_options):\n',
+          )
+
+          path = Path('sprite_gen/frames/extract.py')
+          text = path.read_text(encoding='utf-8')
+          start_marker = '                strip, width_geometry = vfx_frames.normalize_strip_width(\n'
+          end_marker = '                               plain_frames=plain_frames, vfx_geometry=geometry)\n'
+          start = text.find(start_marker)
+          if start < 0:
+              raise SystemExit('extract.py: VFX normalization block start not found')
+          end = text.find(end_marker, start)
+          if end < 0:
+              raise SystemExit('extract.py: VFX normalization block end not found')
+          end += len(end_marker)
+          replacement = '''                effective_vfx = vfx_config
+                width_geometry = {}
+                # Truly blank source frames have no content from which a content-aware
+                # boundary can be inferred. Keep those explicitly authored cases on the
+                # regular-slot path; normal generated VFX defaults to content-aware.
+                if vfx_config["layout"] == "fixed-slots" or vfx_config["allow_blank_frames"].get(state):
+                    effective_vfx = {**vfx_config, "layout": "fixed-slots"}
+                    strip, width_geometry = vfx_frames.normalize_strip_width(
+                        strip, frame_count, effective_vfx, fit_config.get("resample"))
+                    if vfx_config["layout"] != "fixed-slots":
+                        width_geometry["layout_fallback"] = "fixed-slots-for-declared-blank-frames"
+                frames, geometry = vfx_frames.split_frames(strip, frame_count,
+                    (cell_width, cell_height), effective_vfx, fit_config.get("resample"))
+                geometry.update(width_geometry)
+                # Inspect the ACTUAL recovered source regions before shared-canvas
+                # placement. Internal edge contact means a proposed cut crossed
+                # visible content; outer edge contact can still indicate real clipping.
+                source_edges = vfx_frames.source_edge_counts(strip, geometry, vfx_config["edge_alpha"])
+                geometry["source_edge_contacts"] = source_edges
+                for index, count in enumerate(source_edges):
+                    if count:
+                        (all_errors if vfx_config["edge_policy"] == "error" else all_warnings).append(
+                            f"{state}: source frame {index} has {count} edge-contact pixels; "
+                            "the recovered region may be clipped or its boundary may cross visible content. "
+                            "Inspect the extracted frame; use edge_policy=warn only when the frame is visibly complete")
+                plain_frames = frames
+                if vfx_config["processing"] == "pixel":
+                    plain_frames, _ = vfx_frames.split_frames(strip, frame_count,
+                        (cell_width, cell_height), {**effective_vfx, "processing": "crisp"}, "nearest")
+                finalize_state(state, frames, frame_count, geometry["method"],
+                               plain_frames=plain_frames, vfx_geometry=geometry)
+'''
+          path.write_text(text[:start] + replacement + text[end:], encoding='utf-8')
+
+          replace_once(
+              'tests/vfx/test_vfx.py',
+              '    request = {"subject": "effect", "vfx": {"matte": "source-alpha", **options},\n',
+              '    request = {"subject": "effect", "vfx": {"matte": "source-alpha", "layout": "fixed-slots", **options},\n',
+          )
+          replace_once(
+              'tests/vfx/test_vfx.py',
+              '    frames, geometry = vfx_frames.split_frames(strip, 4, (64, 64), cfg(origin=[0.25, 0.75]), "nearest")\n',
+              '    frames, geometry = vfx_frames.split_frames(strip, 4, (64, 64), cfg(origin=[0.25, 0.75], layout="fixed-slots"), "nearest")\n',
+          )
+          replace_once(
+              'tests/vfx/test_vfx.py',
+              '        vfx_frames.split_frames(Image.new("RGBA", (255, 64)), 4, (64, 64), cfg())\n',
+              '        vfx_frames.split_frames(Image.new("RGBA", (255, 64)), 4, (64, 64), cfg(layout="fixed-slots"))\n',
+          )
+
+          replace_once(
+              'tests/vfx/test_generated_width_normalization.py',
+              '    return vfx.normalize_vfx({}, {"shockwave": {"frames": 8, "fps": 16, "loop": False}})\n',
+              '    return vfx.normalize_vfx({"layout": "fixed-slots"}, {"shockwave": {"frames": 8, "fps": 16, "loop": False}})\n',
+          )
+          replace_once(
+              'tests/vfx/test_generated_width_normalization.py',
+              '        "vfx": {"matte": "source-alpha", "processing": "crisp", "origin": [0.5, 0.5]},\n',
+              '        "vfx": {"matte": "source-alpha", "processing": "crisp", "origin": [0.5, 0.5], "layout": "fixed-slots"},\n',
+          )
+          PY
       - name: Install
         run: |
           python -m venv .venv
           .venv/bin/pip install -e '.[dev]'
-      - name: Run VFX regression suite
+      - name: VFX regression suite
         run: .venv/bin/python -m pytest -q tests/vfx
-      - name: Run segmentation and packaging regressions
+      - name: Segmentation and pipeline regressions
         run: .venv/bin/python -m pytest -q tests/frames tests/packaging/test_pipeline_smoke.py tests/packaging/test_cli_taxonomy.py
-      - name: Publish validated implementation
+      - name: Publish validated integration
         run: |
           git rm .github/vfx-content-aware.patch .github/workflows/apply-vfx-content-aware.yml
+          git add sprite_gen/gen/prepare.py sprite_gen/frames/extract.py tests/vfx/test_vfx.py tests/vfx/test_generated_width_normalization.py
           git diff --cached --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'fix: add content-aware VFX frame splicing'
+          git commit -m 'fix: integrate content-aware VFX frame splicing'
           git push origin HEAD:refs/heads/feat/vfx-flipbooks
