@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""VFX request contract: fixed frame space, matte, processing and explicit QA exceptions.
+"""VFX request contract: source recovery, fixed frame space, matte, processing and QA.
 
 An existing effect run WITHOUT a ``vfx`` block keeps legacy component extraction.
 New ``prepare --subject effect`` runs write this block. Character requests never do.
@@ -33,12 +33,15 @@ PRESETS: dict[str, dict[str, Any]] = {
 }
 MATTES = ("chroma", "source-alpha", "black-additive")
 PROCESSING = ("crisp", "soft", "pixel")
+LAYOUTS = ("content-aware", "fixed-slots")
 STYLE_DEFAULT = "stylized anime game VFX, bold readable silhouettes, controlled palette, clean negative space"
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--effect-preset", choices=tuple(PRESETS), default=None,
                         help="VFX preset (implies --subject effect); custom states may override its animation")
+    parser.add_argument("--vfx-layout", choices=LAYOUTS, default=None,
+                        help="source-strip recovery: content-aware (default for AI output) or strict fixed-slots")
     parser.add_argument("--vfx-matte", choices=MATTES, default=None)
     parser.add_argument("--vfx-processing", choices=PROCESSING, default=None)
     parser.add_argument("--vfx-origin", type=parse_origin, default=None, metavar="X,Y",
@@ -64,7 +67,7 @@ def normalize_vfx(raw: Any, states: dict[str, Any]) -> dict[str, Any]:
     """Filesystem-free and fail-loud; callers may not silently ignore misspelled keys."""
     if not isinstance(raw, dict):
         raise SystemExit("vfx must be an object")
-    keys = {"version", "preset", "matte", "processing", "origin", "allow_blank_frames",
+    keys = {"version", "preset", "layout", "matte", "processing", "origin", "allow_blank_frames",
             "allow_sparse_frames", "edge_policy", "edge_alpha"}
     if set(raw) - keys:
         raise SystemExit(f"unknown vfx key(s): {sorted(set(raw) - keys)}")
@@ -73,10 +76,18 @@ def normalize_vfx(raw: Any, states: dict[str, Any]) -> dict[str, Any]:
     preset = raw.get("preset", "burst")
     if preset not in PRESETS:
         raise SystemExit(f"unknown effect preset: {preset!r}")
-    result = {"version": 1, "preset": preset, "matte": raw.get("matte", "chroma"),
-              "processing": raw.get("processing", "crisp"),
-              "origin": raw.get("origin", list(PRESETS[preset]["origin"])),
-              "edge_policy": raw.get("edge_policy", "error"), "edge_alpha": raw.get("edge_alpha", 8)}
+    result = {
+        "version": 1,
+        "preset": preset,
+        "layout": raw.get("layout", "content-aware"),
+        "matte": raw.get("matte", "chroma"),
+        "processing": raw.get("processing", "crisp"),
+        "origin": raw.get("origin", list(PRESETS[preset]["origin"])),
+        "edge_policy": raw.get("edge_policy", "error"),
+        "edge_alpha": raw.get("edge_alpha", 8),
+    }
+    if result["layout"] not in LAYOUTS:
+        raise SystemExit(f"vfx.layout must be one of {LAYOUTS}")
     if result["matte"] not in MATTES:
         raise SystemExit(f"vfx.matte must be one of {MATTES}")
     if result["processing"] not in PROCESSING:
