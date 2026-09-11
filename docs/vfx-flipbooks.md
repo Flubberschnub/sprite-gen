@@ -6,6 +6,40 @@ This is the **image-row VFX path**, built on the existing prepare, generation, e
 curation and composition stages. It generates reusable effect ingredients, not Unity
 prefabs or complete multi-layer spells. No extra image provider or paid service is added.
 
+## Library-asset prompt contract
+
+VFX prompts target **authoring ingredients, not finished effects**. One strip contains one
+visual layer/material behavior, with neutral white/grayscale foreground suitable for tinting.
+Color, emission strength, bloom, secondary particles and environmental interaction belong to
+the consuming engine, not to the generated texture. No additional CLI options are required.
+
+| Preset | Default reusable ingredient |
+|---|---|
+| `burst` | One simple radial lobe mask; no fire, embers or smoke stack. |
+| `hit` | One compact impact-star mask; no debris or secondary flash. |
+| `shockwave` | One expanding annular ring; empty center, no rocks, dust or central flash. |
+| `dust` | One non-emissive puff/density layer; no rocks, glow or lit cloud rendering. |
+| `slash` | One tapered crescent ribbon; no weapon, spark shower or detached shards. |
+| `sparks` | One tapered spark streak for individual particle emission, not a baked shower. |
+| `movement` | One directional whoosh ribbon, not a full-screen speed effect. |
+| `pulse` | One plain looping ring, not an orb plus aura plus ornamental rings. |
+
+The shared prompt rules exclude baked glow halos, bloom, lens flare, lighting spill, cast
+shadows, rocks, glitter, scene context and unrelated secondary layers. Soft processing still
+allows the intrinsic density falloff of the requested material; softness is not the same as
+adding a glow layer. References guide primary shape language, not their palette or composite.
+Custom description/style/action text is preserved, but interpreted within this neutral,
+single-layer contract. Preset action defaults also follow that contract, rather than asking
+for embers/shards that contradict the exclusions.
+
+The neutral-palette rule applies to the **foreground**, not the required matte. Chroma runs
+still use their flat key color, source-alpha asks for actual transparency, and black-additive
+asks for grayscale intensity on pure black without a painted bloom halo. Matte algorithms,
+extraction, curation, timing, origins and export are unchanged by this prompt refinement.
+These are generation instructions, not an automatic guarantee of production-ready art.
+Inspect actual outputs; `export-flipbook --grayscale` can remove residual hue but cannot
+remove unwanted rocks, lighting or other baked detail.
+
 ## Start an effect run
 
 Commands assume the repository is installed in its project venv. Select an available
@@ -28,6 +62,14 @@ the run's asset identifier; no character is required. Add `--base-image /absolut
 for an approved effect reference. Without one, `gen-set` uses text plus the layout guide.
 Provider `grok` can also be selected for image generation. No model is called by prepare,
 extract, inspect, curation or export.
+
+**Updating an existing installation:** `prepare` saves prompts under `prompts/<state>.txt`.
+Pulling code does not rewrite these files or the preset action saved in `sprite-request.json`.
+`gen-set --force` regenerates the image using that saved prompt; it does not refresh templates.
+To try the new defaults without overwriting old raw art, references, requests or curation,
+prepare a fresh directory (for example `runs/shockwave-library`) and run the workflow above
+against that directory. Do not run `prepare --force` over a customized run just to get new
+prompt wording. Character prompts and existing saved VFX prompts are not silently migrated.
 
 Presets: `burst`, `hit`, `shockwave`, `dust`, `slash`, `sparks`, `movement`, `pulse`.
 Each supplies a frame count, fps, loop flag, action and fixed origin. Pulse loops; the
@@ -128,7 +170,7 @@ composites, not a substitute for verifying the engine's color space, bloom and m
 
 | `--vfx-processing` | Behavior |
 |---|---|
-| `crisp` (default) | Graphic anime prompt; preserve antialiased edges. Shared canvas resampling, no forced outline. |
+| `crisp` (default) | Flat graphic mask prompt; preserve antialiased edges. Shared canvas resampling, no forced outline. |
 | `soft` | Translucent/wispy prompt; preserve continuous alpha. No palette reduction or outline. |
 | `pixel` | Nearest-neighbor canvas sampling and explicit binary alpha. No per-frame grid detection or body alignment. |
 
@@ -163,7 +205,7 @@ for `prepare --request /absolute/effect-request.json`:
       "frames": 8,
       "fps": 16,
       "loop": false,
-      "action": "blank, ignite, expand, peak, fragment, dissipate, residual spark, blank"
+      "action": "blank, small lobe, expand, peak, erode, fade, tiny remnant of the same shape, blank"
     }
   }
 }

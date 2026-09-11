@@ -15,26 +15,29 @@ from typing import Any
 
 PRESETS: dict[str, dict[str, Any]] = {
     "burst": {"frames": 8, "fps": 16, "origin": [0.5, 0.5], "loop": False,
-              "action": "tiny ignition, explosive expansion, sharp peak, fragmentation, dissipating embers"},
+              "action": "one compact lobe shape expands radially, reaches a clear peak, then erodes and fades in place"},
     "hit": {"frames": 8, "fps": 24, "origin": [0.5, 0.5], "loop": False,
-            "action": "brief anticipation, sharp asymmetric impact star, fast outward shards, rapid dissipation"},
+            "action": "one small impact-star shape snaps to a sharp peak, contracts and fades without shedding particles"},
     "shockwave": {"frames": 8, "fps": 16, "origin": [0.5, 0.5], "loop": False,
-                  "action": "small ring expands from a fixed center, thins, breaks apart and dissipates"},
+                  "action": "one small ring expands from a fixed center, its rim thins and erodes, then fades with an empty center throughout"},
     "dust": {"frames": 12, "fps": 16, "origin": [0.5, 0.85], "loop": False,
-             "action": "small grounded puff expands upward and outward, curls, fragments and dissipates"},
+             "action": "one soft puff expands upward and outward from the emission point, its broad lobes erode and fade"},
     "slash": {"frames": 8, "fps": 24, "origin": [0.25, 0.5], "loop": False,
-              "action": "thin leading crescent sweeps right, reaches a broad peak, leaves shards and dissipates"},
+              "action": "one tapered crescent sweeps right, widens briefly, then its tail erodes and the ribbon fades"},
     "sparks": {"frames": 12, "fps": 24, "origin": [0.5, 0.5], "loop": False,
-               "action": "compact ignition scatters disconnected sparks outward, which slow and fade"},
+               "action": "one short tapered streak extends along its axis, shortens and fades; particle scattering is authored in engine"},
     "movement": {"frames": 8, "fps": 24, "origin": [0.2, 0.5], "loop": False,
-                 "action": "directional acceleration streaks extend right from the origin, stretch, break and fade"},
+                 "action": "one tapered whoosh ribbon extends right from the origin, stretches, then erodes from its tail and fades"},
     "pulse": {"frames": 12, "fps": 16, "origin": [0.5, 0.5], "loop": True,
-              "action": "energy gathers, expands and contracts in a seamless pulse with a continuous wrap"},
+              "action": "one plain ring gently expands and contracts in radius and thickness, returning smoothly to its initial shape"},
 }
 MATTES = ("chroma", "source-alpha", "black-additive")
 PROCESSING = ("crisp", "soft", "pixel")
 LAYOUTS = ("content-aware", "fixed-slots")
-STYLE_DEFAULT = "stylized anime game VFX, bold readable silhouettes, controlled palette, clean negative space"
+STYLE_DEFAULT = (
+    "reusable stylized game VFX authoring ingredient, single visual layer, neutral white/grayscale "
+    "tintable mask, bold readable silhouette, low detail, clean negative space, no baked lighting"
+)
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
