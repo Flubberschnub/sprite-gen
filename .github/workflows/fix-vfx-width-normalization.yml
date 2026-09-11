@@ -23,21 +23,22 @@ jobs:
           from pathlib import Path
 
           path = Path('sprite_gen/frames/extract.py')
-          text = path.read_text(encoding='utf-8')
-          old = '''                frames, geometry = vfx_frames.split_frames(strip, frame_count,
-                    (cell_width, cell_height), vfx_config, fit_config.get("resample"))
-                # A letterbox must not hide source clipping. Inspect slot edges
-          '''
-          new = '''                strip, width_geometry = vfx_frames.normalize_strip_width(
-                    strip, frame_count, vfx_config, fit_config.get("resample"))
-                frames, geometry = vfx_frames.split_frames(strip, frame_count,
-                    (cell_width, cell_height), vfx_config, fit_config.get("resample"))
-                geometry.update(width_geometry)
-                # A letterbox must not hide source clipping. Inspect slot edges
-          '''
-          if old not in text:
-              raise SystemExit('expected VFX extraction snippet was not found; refusing an ambiguous edit')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          lines = path.read_text(encoding='utf-8').splitlines()
+          matches = [
+              index for index, line in enumerate(lines)
+              if 'frames, geometry = vfx_frames.split_frames(strip, frame_count,' in line
+          ]
+          if len(matches) != 1:
+              raise SystemExit(f'expected exactly one VFX primary split call, found {len(matches)}')
+          index = matches[0]
+          indent = lines[index][:len(lines[index]) - len(lines[index].lstrip())]
+          lines[index:index] = [
+              indent + 'strip, width_geometry = vfx_frames.normalize_strip_width(',
+              indent + '    strip, frame_count, vfx_config, fit_config.get("resample"))',
+          ]
+          # The original split call and its continuation moved down by two lines.
+          lines.insert(index + 4, indent + 'geometry.update(width_geometry)')
+          path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
           PY
       - name: Install and test
         run: |
