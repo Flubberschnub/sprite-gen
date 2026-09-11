@@ -149,8 +149,16 @@ def run_item(
                 result["ok"] = True
                 return result
             result["regenerated_because"] = why or bad_image  # the files exist but do not prove a finished row — generate again, say why
-        identity = anchor_mod.identity_ref(run_dir, state, request, quiet=True)
-        refs = [identity, guide]
+        if "vfx" in request:
+            from sprite_gen.spec.vfx import config
+            config(request)
+            base = request["character"].get("base_image")
+            refs = [run_dir / base, guide] if base else [guide]
+            if base and not refs[0].is_file():
+                raise SystemExit(f"effect reference missing: {refs[0]}")
+        else:
+            identity = anchor_mod.identity_ref(run_dir, state, request, quiet=True)
+            refs = [identity, guide]
         result["refs"] = [str(r) for r in refs]
         out.parent.mkdir(parents=True, exist_ok=True)
         # The report is the commit marker of a finished row. Drop the previous one BEFORE the

@@ -57,6 +57,7 @@ grouping is derived from `sprite_gen/_modules.py`, the one taxonomy table.
 |---|---|
 | [states-and-frames.md](states-and-frames.md) | Which states to request and how many frames each |
 | [subject-profiles.md](subject-profiles.md) | `character` vs `effect` subjects and the sparse-frame floor they set |
+| [vfx-flipbooks.md](vfx-flipbooks.md) | Effect presets, fixed-origin extraction, alpha policies and uniform-grid export |
 | [pixel-unfake.md](pixel-unfake.md) | The `fit` / `pixel_unfake` path for pixel-art targets and jitter-free locomotion |
 | [chroma-alpha.md](chroma-alpha.md) | Choosing the chroma key and diagnosing alpha cleanup after extraction |
 

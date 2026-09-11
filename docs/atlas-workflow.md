@@ -2,6 +2,10 @@
 
 This page owns the agent's row execution procedure. Start and finish conversation choices belong to [user-workflow](user-workflow.md). Stage data, numeric settings and output ownership belong to [run-contract](run-contract.md).
 
+For **VFX flipbooks**, use [vfx-flipbooks](vfx-flipbooks.md): the prepared `vfx` contract
+selects fixed-origin extraction, effect prompts and `export-flipbook`. The full-body,
+identity and connected-component requirements below apply to character runs only.
+
 ## Lock the base before preparing a run
 
 Use one accepted, uncropped, full-body idle image with the intended proportions, style, orientation and identity. A pixel-art run needs a measurable pixel grid in the base; changing prompt wording later cannot correct its style. If no suitable base exists, generate it with the chosen image provider and establish it as the reference before motion generation. Directional anchors replace the base in later row inputs; [directional-anchor-workflow](directional-anchor-workflow.md) owns that sequence and the `anchor` resolver.

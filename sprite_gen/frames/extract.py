@@ -2360,6 +2360,8 @@ def _require_generation_consistency(run_dir: Path, manifest: dict, name: str,
         request = load_request(run_dir)
     except (OSError, ValueError) as exc:
         raise SystemExit(f"cannot read sprite-request.json for {run_dir}: {exc}")
+    from sprite_gen.spec import vfx as vfx_spec
+    vfx_config = vfx_spec.config(request)
     request_states = set(request.get("states", {}))
     row_states = [row["state"] for row in manifest["rows"]]
     dupes = sorted({s for s in row_states if row_states.count(s) > 1})
@@ -2402,6 +2404,8 @@ def _require_generation_consistency(run_dir: Path, manifest: dict, name: str,
         files = row.get("files")
         if not isinstance(files, list) or not files:
             raise SystemExit(f"corrupt {name} {run_dir}: manifest row '{state}' has no frame files (empty generation)")
+        if vfx_config and row.get("vfx_fingerprint") != vfx_spec.fingerprint(request, state):
+            raise SystemExit(f"stale VFX recipe for {state}; re-extract (unfreeze the row first if frozen)")
         prefix = frames_dir_rel(request, state) + "/"
         for rel in files:
             if not isinstance(rel, str) or not rel.startswith(prefix):
@@ -2570,6 +2574,11 @@ def _run(args: argparse.Namespace):
 
 def _run_locked(args: argparse.Namespace, run_dir: Path):
     request = load_request(run_dir)
+    from sprite_gen.spec import vfx as vfx_spec
+    from sprite_gen.frames import vfx_frames
+    vfx_config = vfx_spec.config(request)
+    if vfx_config and (args.segmentation is not None or args.allow_slot_fallback):
+        raise SystemExit("VFX uses fixed slots; character segmentation/fallback flags do not apply")
     # Sparse-floor SSoT is the request's subject profile; the CLI flag is an
     # explicit override only. Profile-derived values are NOT stamped into
     # extract_args (frames are a derived cache of raw + request + engine, so a
@@ -2708,7 +2717,7 @@ def _run_locked(args: argparse.Namespace, run_dir: Path):
     def finalize_state(state: str, frames: list, frame_count: int, method: str,
                        plain_frames: list | None = None, orig_frames: list | None = None,
                        input_grids: list | None = None, labels: list | None = None,
-                       takes: list | None = None) -> None:
+                       takes: list | None = None, vfx_geometry: dict | None = None) -> None:
         rel_dir = frames_dir_rel(request, state)  # e.g. frames/down/idle (taxonomy) | frames/down_idle (legacy)
         state_dir = frames_root / rel_dir.removeprefix("frames/")
         state_dir.mkdir(parents=True, exist_ok=True)
@@ -2738,7 +2747,11 @@ def _run_locked(args: argparse.Namespace, run_dir: Path):
                 atomic_save_image(frame, output)
                 orig_paths.append(f"{rel_dir}/orig/frame-{index}.png")
 
-        errors, warnings, frame_records = inspect_frames(frames, chroma_key, args)
+        if vfx_config:
+            errors, warnings, frame_records = vfx_frames.inspect_frames(
+                frames, state, vfx_config, args.min_used_pixels, chroma_key, args)
+        else:
+            errors, warnings, frame_records = inspect_frames(frames, chroma_key, args)
         all_errors.extend(f"{state}: {error}" for error in errors)
         all_warnings.extend(f"{state}: {warning}" for warning in warnings)
         row = {
@@ -2752,6 +2765,9 @@ def _run_locked(args: argparse.Namespace, run_dir: Path):
             # 비교해 stale 행을 raw 에서 자동 재유도한다 (self-heal).
             "engine_revision": engine_revision(),
         }
+        if vfx_config:
+            row["vfx"] = vfx_geometry
+            row["vfx_fingerprint"] = vfx_spec.fingerprint(request, state)
         if labels and any(labels):
             row["labels"] = labels
         if takes:
@@ -2969,6 +2985,44 @@ def _run_locked(args: argparse.Namespace, run_dir: Path):
         state_cfg = request["states"][state]
         frame_count = int(state_cfg["frames"])
         takes_cfg = state_cfg.get("takes") or []
+        if vfx_config:
+            try:
+                with Image.open(run_dir / raw_rel(request, state)) as opened:
+                    strip = vfx_frames.matte_source(opened, vfx_config, chroma_key, args,
+                        chroma_mode=chroma_mode, unmix_reach=unmix_reach,
+                        spill_max_fraction=spill_max_fraction)
+                effective_vfx = vfx_config
+                width_geometry = {}
+                # Truly blank source frames have no content from which a content-aware
+                # boundary can be inferred. Keep those explicitly authored cases on the
+                # regular-slot path; normal generated VFX defaults to content-aware.
+                if vfx_config["layout"] == "fixed-slots" or vfx_config["allow_blank_frames"].get(state):
+                    effective_vfx = {**vfx_config, "layout": "fixed-slots"}
+                    strip, width_geometry = vfx_frames.normalize_strip_width(
+                        strip, frame_count, effective_vfx, fit_config.get("resample"))
+                    if vfx_config["layout"] != "fixed-slots":
+                        width_geometry["layout_fallback"] = "fixed-slots-for-declared-blank-frames"
+                frames, geometry = vfx_frames.split_frames(strip, frame_count,
+                    (cell_width, cell_height), effective_vfx, fit_config.get("resample"))
+                geometry.update(width_geometry)
+                # Inspect the ACTUAL recovered source regions before shared-canvas placement.
+                source_edges = vfx_frames.source_edge_counts(strip, geometry, vfx_config["edge_alpha"])
+                geometry["source_edge_contacts"] = source_edges
+                for index, count in enumerate(source_edges):
+                    if count:
+                        (all_errors if vfx_config["edge_policy"] == "error" else all_warnings).append(
+                            f"{state}: source frame {index} has {count} edge-contact pixels; "
+                            "the recovered region may be clipped or its boundary may cross visible content. "
+                            "Inspect the extracted frame; use edge_policy=warn only when the frame is visibly complete")
+                plain_frames = frames
+                if vfx_config["processing"] == "pixel":
+                    plain_frames, _ = vfx_frames.split_frames(strip, frame_count,
+                        (cell_width, cell_height), {**effective_vfx, "processing": "crisp"}, "nearest")
+                finalize_state(state, frames, frame_count, geometry["method"],
+                    plain_frames=plain_frames, vfx_geometry=geometry)
+            except (OSError, ValueError) as exc:
+                all_errors.append(f"{state}: {exc}")
+            continue
         if takes_cfg and not pixel_unfake:
             all_errors.append(f"{state}: takes require fit.pixel_unfake")
             continue
@@ -3190,7 +3244,10 @@ def engine_revision() -> str:
     # the same folder (extract=frames/, layout=spec/), so resolve layout by its
     # module file, not as a sibling of __file__.
     import sprite_gen.spec.layout as _layout_module
-    sources = (Path(__file__), Path(_layout_module.__file__))
+    from sprite_gen.frames import vfx_frames as _vfx_frames
+    from sprite_gen.spec import vfx as _vfx_spec
+    sources = (Path(__file__), Path(_layout_module.__file__),
+               Path(_vfx_frames.__file__), Path(_vfx_spec.__file__))
     key = tuple(source.stat().st_mtime_ns for source in sources)
     if _ENGINE_REVISION is None or _ENGINE_REVISION_KEY != key:
         digest = hashlib.sha256()
@@ -3222,6 +3279,8 @@ def heal_run(run_dir: Path | str) -> dict[str, Any]:
     manifest = load_frames_manifest(manifest_path)
     request = load_request(run_dir)   # 게이트 경유 — heal 도 은퇴 키 런에서 돈다
     current = engine_revision()
+    from sprite_gen.spec import vfx as vfx_spec
+    vfx_config = vfx_spec.config(request)
     # 확정 행 동결 (maintainer 확정 2026-07-18): curation states.<state>.frozen == true 인
     # 행은 사용자가 승인·편집을 끝낸 확정본 — 엔진이 바뀌어도 자가치유가 절대
     # 재유도하지 않는다 (회귀: 서버 가동 중 엔진 편집 → heal 이 확정 down_idle 을
@@ -3237,7 +3296,10 @@ def heal_run(run_dir: Path | str) -> dict[str, Any]:
     frozen_kept = []
     for row in manifest.get("rows", []):
         state = row.get("state")
-        if state not in request.get("states", {}) or row.get("engine_revision") == current:
+        if state not in request.get("states", {}):
+            continue
+        recipe_current = not vfx_config or row.get("vfx_fingerprint") == vfx_spec.fingerprint(request, state)
+        if row.get("engine_revision") == current and recipe_current:
             continue
         if state in frozen:
             frozen_kept.append(state)

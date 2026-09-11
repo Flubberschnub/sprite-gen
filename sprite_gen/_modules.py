@@ -35,6 +35,7 @@ MODULE_DOMAIN = {
     'layers': 'compose',
     'export_pngs': 'compose',
     'export_aseprite': 'compose',
+    'export_flipbook': 'compose',
     'breathe': 'effects',
     'anatomy': 'effects',
     'recolor': 'effects',

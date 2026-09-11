@@ -61,6 +61,7 @@ Pass choices already stated in the request. The guide checks access, combines ex
 
 | Task | Entry | Contract |
 |---|---|---|
+| VFX flipbooks | `prepare --subject effect` / `--effect-preset`, `gen-set`, `extract`, `export-flipbook` | [vfx-flipbooks](docs/vfx-flipbooks.md) |
 | GPT image sprites | `prepare`, `gen-set --provider codex`, `extract`, compose and QA | [atlas-workflow](docs/atlas-workflow.md) |
 | Grok video sprites | `video-set` | [video-pipeline](docs/video-pipeline.md) |
 | Ordinary image or edit | `gen --provider codex` or `gen --provider grok` | [gen](docs/gen.md) |
@@ -73,7 +74,7 @@ Pass choices already stated in the request. The guide checks access, combines ex
 | Engine exports | `export-aseprite`, `export-pngs` | [engine-export](docs/engine-export.md) |
 | Defaults | `defaults show`, `defaults save`, `defaults clear` | [user-workflow](docs/user-workflow.md#one-settings-owner) |
 
-Use existing automatic pipeline stages for background removal, extraction, alignment and export. Do not ask users to select each script. For a direct utility request, run that utility; no unrelated generation questions are needed. Preserve the row pipeline and component extraction for image sprites. One-shot grid generation and fixed cell cutting are not an alternative sprite-generation route.
+Use existing automatic pipeline stages for background removal, extraction, alignment and export. Do not ask users to select each script. For a direct utility request, run that utility; no unrelated generation questions are needed. Preserve the row pipeline and component extraction for character image sprites. For VFX, the explicit `vfx` contract owns fixed-slot extraction and fixed origins; follow the VFX route above instead of character identity/idle gates. Do not substitute ad hoc crop scripts for either path.
 
 ## 실행 인터프리터
 

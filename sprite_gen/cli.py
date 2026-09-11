@@ -22,6 +22,8 @@ from sprite_gen.serve import serve_compose, serve_curation
 from sprite_gen.spec import migrate_breathe, migrate_request
 from sprite_gen.gen.prepare import STYLE_DEFAULT, _outline_config
 from sprite_gen.spec.subject import SUBJECTS
+from sprite_gen.spec import vfx as vfx_spec
+from sprite_gen.compose import export_flipbook
 from sprite_gen.workflow import guide, preferences
 
 
@@ -57,6 +59,7 @@ def _add_prepare(p: argparse.ArgumentParser) -> None:
     p.add_argument("--subject", choices=SUBJECTS, default=None,
                    help="what the run draws: character (default) or effect — "
                         "sets validation defaults like the sparse-frame floor")
+    vfx_spec.add_arguments(p)
     p.add_argument("--cell-size", type=int, default=256)
     p.add_argument("--cell-width", type=int)
     p.add_argument("--cell-height", type=int)
@@ -257,6 +260,8 @@ COMMANDS: dict[str, tuple[str, Callable[[argparse.ArgumentParser], None], Callab
         unpack_atlas.run,
     ),
     "export-pngs": ("Export curated frames back to named PNGs.", _add_export_pngs, export_pngs.run),
+    "export-flipbook": ("Export curated VFX as a uniform grid with playback and blending metadata.",
+                        export_flipbook.add_arguments, export_flipbook.run),
     "export-aseprite": (
         "Export the composed atlas as Aseprite-compatible JSON metadata.",
         export_aseprite.add_arguments,
