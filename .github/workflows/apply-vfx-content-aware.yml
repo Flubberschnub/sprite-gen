@@ -53,38 +53,41 @@ jobs:
           if end < 0:
               raise SystemExit('extract.py: VFX normalization block end not found')
           end += len(end_marker)
-          replacement = '''                effective_vfx = vfx_config
-                width_geometry = {}
-                # Truly blank source frames have no content from which a content-aware
-                # boundary can be inferred. Keep those explicitly authored cases on the
-                # regular-slot path; normal generated VFX defaults to content-aware.
-                if vfx_config["layout"] == "fixed-slots" or vfx_config["allow_blank_frames"].get(state):
-                    effective_vfx = {**vfx_config, "layout": "fixed-slots"}
-                    strip, width_geometry = vfx_frames.normalize_strip_width(
-                        strip, frame_count, effective_vfx, fit_config.get("resample"))
-                    if vfx_config["layout"] != "fixed-slots":
-                        width_geometry["layout_fallback"] = "fixed-slots-for-declared-blank-frames"
-                frames, geometry = vfx_frames.split_frames(strip, frame_count,
-                    (cell_width, cell_height), effective_vfx, fit_config.get("resample"))
-                geometry.update(width_geometry)
-                # Inspect the ACTUAL recovered source regions before shared-canvas
-                # placement. Internal edge contact means a proposed cut crossed
-                # visible content; outer edge contact can still indicate real clipping.
-                source_edges = vfx_frames.source_edge_counts(strip, geometry, vfx_config["edge_alpha"])
-                geometry["source_edge_contacts"] = source_edges
-                for index, count in enumerate(source_edges):
-                    if count:
-                        (all_errors if vfx_config["edge_policy"] == "error" else all_warnings).append(
-                            f"{state}: source frame {index} has {count} edge-contact pixels; "
-                            "the recovered region may be clipped or its boundary may cross visible content. "
-                            "Inspect the extracted frame; use edge_policy=warn only when the frame is visibly complete")
-                plain_frames = frames
-                if vfx_config["processing"] == "pixel":
-                    plain_frames, _ = vfx_frames.split_frames(strip, frame_count,
-                        (cell_width, cell_height), {**effective_vfx, "processing": "crisp"}, "nearest")
-                finalize_state(state, frames, frame_count, geometry["method"],
-                               plain_frames=plain_frames, vfx_geometry=geometry)
-          '''
+          I = '                '
+          J = '                    '
+          K = '                        '
+          replacement_lines = [
+              I + 'effective_vfx = vfx_config',
+              I + 'width_geometry = {}',
+              I + '# Truly blank source frames have no content from which a content-aware',
+              I + '# boundary can be inferred. Keep those explicitly authored cases on the',
+              I + '# regular-slot path; normal generated VFX defaults to content-aware.',
+              I + 'if vfx_config["layout"] == "fixed-slots" or vfx_config["allow_blank_frames"].get(state):',
+              J + 'effective_vfx = {**vfx_config, "layout": "fixed-slots"}',
+              J + 'strip, width_geometry = vfx_frames.normalize_strip_width(',
+              K + 'strip, frame_count, effective_vfx, fit_config.get("resample"))',
+              J + 'if vfx_config["layout"] != "fixed-slots":',
+              K + 'width_geometry["layout_fallback"] = "fixed-slots-for-declared-blank-frames"',
+              I + 'frames, geometry = vfx_frames.split_frames(strip, frame_count,',
+              J + '(cell_width, cell_height), effective_vfx, fit_config.get("resample"))',
+              I + 'geometry.update(width_geometry)',
+              I + '# Inspect the ACTUAL recovered source regions before shared-canvas placement.',
+              I + 'source_edges = vfx_frames.source_edge_counts(strip, geometry, vfx_config["edge_alpha"])',
+              I + 'geometry["source_edge_contacts"] = source_edges',
+              I + 'for index, count in enumerate(source_edges):',
+              J + 'if count:',
+              K + '(all_errors if vfx_config["edge_policy"] == "error" else all_warnings).append(',
+              K + '    f"{state}: source frame {index} has {count} edge-contact pixels; "',
+              K + '    "the recovered region may be clipped or its boundary may cross visible content. "',
+              K + '    "Inspect the extracted frame; use edge_policy=warn only when the frame is visibly complete")',
+              I + 'plain_frames = frames',
+              I + 'if vfx_config["processing"] == "pixel":',
+              J + 'plain_frames, _ = vfx_frames.split_frames(strip, frame_count,',
+              K + '(cell_width, cell_height), {**effective_vfx, "processing": "crisp"}, "nearest")',
+              I + 'finalize_state(state, frames, frame_count, geometry["method"],',
+              J + 'plain_frames=plain_frames, vfx_geometry=geometry)',
+          ]
+          replacement = '\n'.join(replacement_lines) + '\n'
           path.write_text(text[:start] + replacement + text[end:], encoding='utf-8')
 
           replace_once(
@@ -102,7 +105,6 @@ jobs:
               '        vfx_frames.split_frames(Image.new("RGBA", (255, 64)), 4, (64, 64), cfg())\n',
               '        vfx_frames.split_frames(Image.new("RGBA", (255, 64)), 4, (64, 64), cfg(layout="fixed-slots"))\n',
           )
-
           replace_once(
               'tests/vfx/test_generated_width_normalization.py',
               '    return vfx.normalize_vfx({}, {"shockwave": {"frames": 8, "fps": 16, "loop": False}})\n',
