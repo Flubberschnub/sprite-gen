@@ -1,6 +1,6 @@
 # VFX flipbooks
 
-> Owns: effect presets, fixed-origin extraction, VFX alpha/QA policies and uniform-grid export.
+> Owns: effect presets, content-aware/fixed-slot extraction, fixed-origin repacking, VFX alpha/QA policies and uniform-grid export.
 
 This is the **image-row VFX path**, built on the existing prepare, generation, extraction,
 curation and composition stages. It generates reusable effect ingredients, not Unity
@@ -46,21 +46,64 @@ for held frames: duplicate indices in `selected` are deduplicated by the curatio
 Unlike the deduplicating runtime atlas, a flipbook repeats each held instance in a distinct
 cell, preserving its duration in a regular texture-grid player.
 
-## Fixed frame coordinates
+## Source layout recovery and fixed frame coordinates
 
 A VFX sequence can have many disconnected pieces, change size dramatically and disappear.
-Consequently, its extraction uses **explicit equal slots**, not connected-body segmentation.
-The raw image must be one horizontal strip whose width is divisible by its frame count.
-No automatic content cropping, fragment removal, recentering, ground alignment, outline
-insertion or body registration is performed. An invalid slot width fails with an actionable
-message instead of guessing borders. Misplaced frames in generated art still require
-regeneration or curation; the extractor cannot infer the intended animation.
+The final game flipbook still needs uniform cells, but an AI-generated source strip is **not
+required to have perfectly equal source slots**.
 
-The whole source frame canvas is fitted with one shared aspect-preserving scale and the
-same origin-relative letterboxing for all frames. The relative sizes and positions within
-that canvas survive. Source slot edges are checked **before** fitting, so padding added by
-letterboxing cannot conceal a clipped spark. Fixed slots do not permit effects to overflow
-into neighboring frames.
+New VFX runs default to:
+
+```json
+"vfx": { "layout": "content-aware" }
+```
+
+Content-aware extraction reuses sprite-gen's existing horizontal projection / dynamic-
+programming segmentation machinery. After alpha/matte extraction, it measures horizontal
+content mass and chooses the requested number of low-cost cuts instead of blindly slicing
+at `strip_width / frame_count`. This is the same family of protection that keeps character
+rows usable when generated poses drift away from the requested grid.
+
+The recovered regions are then **repacked**, not independently normalized. Every region:
+
+- keeps its original pixels and relative visible size;
+- is padded to one shared source-canvas width;
+- aligns the same configured normalized VFX origin;
+- receives one shared aspect-preserving scale into the runtime cell.
+
+That distinction is important: a small ignition remains smaller than a peak explosion, and
+a directional effect is not enlarged merely because its visible bounds are narrow. The
+content-aware cut discovers source boundaries; it does not make every frame fill its cell.
+The final atlas/flipbook remains a regular grid even when the generated source spacing was
+irregular or its total width was not divisible by the frame count.
+
+For a known regular hand-authored sheet, opt back into strict slicing:
+
+```bash
+sprite-gen prepare ... --vfx-layout fixed-slots
+```
+
+or request JSON:
+
+```json
+"vfx": { "layout": "fixed-slots" }
+```
+
+`fixed-slots` requires regular source slots. Provider outputs that are only a few pixels off
+the requested total width are normalized as one whole strip to the nearest divisible width
+before slicing; the low-level fixed-slot splitter itself stays strict. This mode is useful
+when source geometry is already authoritative and content-aware inference is undesirable.
+
+A declared intentionally blank source frame has no visible content from which a separator
+can be inferred, so states using `allow_blank_frames` automatically use the fixed-slot path
+for that extraction and record the fallback in VFX geometry metadata. Sparse-but-nonempty
+frames can still use content-aware recovery.
+
+Edge QA runs on the **actual recovered source regions before repacking**. Therefore source
+edge contact can mean either genuine clipping at the outer image boundary or a proposed
+internal cut crossing visible content. It is no longer evidence merely that an imaginary
+equal-width slot boundary happened to pass through an otherwise complete effect. Inspect
+the extracted result before accepting `edge_policy: "warn"`.
 
 Origins are normalized **top-left** coordinates. Defaults include `(0.5, 0.5)` for radial
 effects and `(0.5, 0.85)` for dust. Override with `--vfx-origin 0.25,0.5`. The JSON export
@@ -106,6 +149,7 @@ for `prepare --request /absolute/effect-request.json`:
   "subject": "effect",
   "vfx": {
     "preset": "burst",
+    "layout": "content-aware",
     "matte": "chroma",
     "processing": "crisp",
     "origin": [0.5, 0.5],
@@ -178,8 +222,15 @@ The grid remains a PNG asset, not a Unity prefab, normal map or HDR texture.
 Character runs are unchanged. Existing hand-authored `subject: effect` requests **without**
 a `vfx` block retain legacy component extraction and the old sparse profile. To migrate,
 prepare a new effect run (preserving the old raw/curation as a backup), or add a validated
-`vfx` block and re-extract a correctly slotted source. Preparing a new effect run also
-replaces the character prompt rules with effect rules.
+`vfx` block and re-extract. New VFX requests default to content-aware source recovery;
+`fixed-slots` is available when exact source slot geometry is already known. Preparing a
+new effect run also replaces the character prompt rules with effect rules.
+
+Content-aware segmentation is deterministic but not omniscient. If an effect has no usable
+horizontal separation between consecutive frames, the requested frame count cannot be
+recovered safely and extraction fails rather than silently falling back to arbitrary cuts.
+An interactive/manual boundary editor is not part of this version; such a tool can be added
+later for genuinely ambiguous source art.
 
 The video-to-loop route is not modified by this feature. Its rest-pose detector, cleanup
 and loop assumptions should not be used as an automatic one-shot VFX extractor. Character
