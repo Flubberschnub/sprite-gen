@@ -1,0 +1,41 @@
+name: Apply content-aware VFX splicing
+
+on:
+  push:
+    branches: [feat/vfx-flipbooks]
+    paths:
+      - '.github/vfx-content-aware.patch'
+      - '.github/workflows/apply-vfx-content-aware.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.repository == 'Flubberschnub/sprite-gen'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Verify patch applies cleanly
+        run: git apply --check .github/vfx-content-aware.patch
+      - name: Apply implementation
+        run: git apply --index .github/vfx-content-aware.patch
+      - name: Install
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -e '.[dev]'
+      - name: Run VFX regression suite
+        run: .venv/bin/python -m pytest -q tests/vfx
+      - name: Run segmentation and packaging regressions
+        run: .venv/bin/python -m pytest -q tests/frames tests/packaging/test_pipeline_smoke.py tests/packaging/test_cli_taxonomy.py
+      - name: Publish validated implementation
+        run: |
+          git rm .github/vfx-content-aware.patch .github/workflows/apply-vfx-content-aware.yml
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: add content-aware VFX frame splicing'
+          git push origin HEAD:refs/heads/feat/vfx-flipbooks
